@@ -40,35 +40,22 @@ def get_possible_number_of_processes():
     return memory_free_values // memory_usage_per_process
 
 
-def start_container_at_port(port):
-    sp.Popen(
-        f'docker run --name ip_api{port} -d -e "env_port={port}" -p {port}:8000 --gpus all -t image_processing_api'.split()
-    )
-
-
 async def lifespan(app: FastAPI):
     # Load the ML model
     n_processes = get_possible_number_of_processes()
-    ports = [8000 + i for i in range(n_processes)]
 
     print(f"Total free memory: {get_gpu_memory()}")
     print(f"Number of processes: {n_processes}")
-    print("Starting containers")
 
-    for port in ports:
-        print(f"Starting container at port {port}")
-        start_container_at_port(port)
-    print("Containers started")
+    sp.Popen(f"gunicorn -b 0.0.0.0:8000 -w {n_processes} app:app".split())
+
     yield
-    # Clean up the ML models and release the resources
-    print("Cleaning up containers")
-    for port in ports:
-        sp.Popen(f"docker stop ip_api{port}".split())
-        sp.Popen(f"docker rm ip_api{port}".split())
+    # Clean kill the process running at port 8000
+
+    sp.Popen(f"kill -9 $(lsof -t -i:8000)".split())
 
 
 n_processes = get_possible_number_of_processes()
-ports = [8000 + i for i in range(n_processes)]
 app = FastAPI(lifespan=lifespan)
 
 ## app.include_router(get_info.router)
@@ -83,12 +70,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-next_port = 0
-
 
 @app.post("/process")
 def process_image(file: UploadFile = File(...)):
-    target_port = 8000 + next_port
-    next_port = (next_port + 1) % n_processes
-
+    target_port = 8000
     return send_request_to_container(target_port, file)
